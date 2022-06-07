@@ -41,7 +41,8 @@ import java.util.List;
 
 public class EchoTestActivity extends AppCompatActivity {
     private static final String TAG = "EchoTestActivity";
-    static final String JANUS_URL = "wss://webrtc.encmed.cn:8989";
+    //static final String JANUS_URL = "wss://webrtc.encmed.cn:8989";
+    static final String JANUS_URL = "wss://172.20.67.10:8989";
     SurfaceViewRenderer surfaceViewRendererLocal;
     SurfaceViewRenderer surfaceViewRendererRemote;
 

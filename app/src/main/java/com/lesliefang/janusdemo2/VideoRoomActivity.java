@@ -1,13 +1,22 @@
 package com.lesliefang.janusdemo2;
 
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.media.projection.MediaProjection;
+import android.media.projection.MediaProjectionManager;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -35,6 +44,7 @@ import org.webrtc.PeerConnection;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.RendererCommon;
 import org.webrtc.RtpReceiver;
+import org.webrtc.ScreenCapturerAndroid;
 import org.webrtc.SdpObserver;
 import org.webrtc.SessionDescription;
 import org.webrtc.SurfaceTextureHelper;
@@ -53,12 +63,13 @@ import java.util.List;
 public class VideoRoomActivity extends AppCompatActivity {
     private static final String TAG = "VideoRoomActivity";
     static final String JANUS_URL = "wss://janus.conf.meetecho.com/ws";
-
+    private static final int REQUEST_MEDIA_PROJECTION = 1;
     PeerConnectionFactory peerConnectionFactory;
     PeerConnection peerConnection;
     private AudioTrack audioTrack;
     private VideoTrack videoTrack;
     private VideoCapturer videoCapturer;
+    private ScreenCapturerAndroid screenCapturerAndroid;
     private VideoSource videoSource;
     private SurfaceTextureHelper surfaceTextureHelper;
 
@@ -75,6 +86,22 @@ public class VideoRoomActivity extends AppCompatActivity {
     RecyclerView recyclerView;
 
     private boolean isFrontCamera = true;
+    private boolean isShareScreen = false;
+    private ICaptureBinder binder;
+    private MediaProjectionManager mMediaProjectionManager;
+    private ServiceConnection serviceConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            if(service instanceof ICaptureBinder) {
+                binder = (ICaptureBinder) service;
+            }
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -83,8 +110,19 @@ public class VideoRoomActivity extends AppCompatActivity {
         recyclerView = findViewById(R.id.recyclerview);
         recyclerView.setLayoutManager(new GridLayoutManager(this, 2));
         userName = getIntent().getStringExtra("userName");
+        /*if(getIntent().hasExtra("roomName")) {
+            room.setId(getIntent().getIntExtra("roomName",12345));
+        }*/
+        if(getIntent().getBooleanExtra("shareScreen",false)){
+            isShareScreen = true;
+            startShareScreen();
+        }else{
+            startCameraVideo();
+        }
+    }
 
-        videoCapturer = createVideoCapturer(isFrontCamera);
+    private void startCameraVideo() {
+         videoCapturer = createVideoCapturer(isFrontCamera);
         if (videoCapturer == null) {
             return;
         }
@@ -140,12 +178,36 @@ public class VideoRoomActivity extends AppCompatActivity {
         recyclerView.setAdapter(adapter);
     }
 
+    private void startShareScreen() {
+        mMediaProjectionManager = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+        startActivityForResult(
+                mMediaProjectionManager.createScreenCaptureIntent(),
+                REQUEST_MEDIA_PROJECTION);
+        Intent intent = new Intent(this, AudioCaptureService.class);
+        bindService(intent,serviceConnection,Context.BIND_AUTO_CREATE);
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        videoCapturer.dispose();
-        surfaceTextureHelper.dispose();
-        janusClient.disConnect();
+        if(isShareScreen){
+            if(screenCapturerAndroid != null){
+                screenCapturerAndroid.dispose();
+            }
+        }else{
+            if(videoCapturer != null){
+                videoCapturer.dispose();
+            }
+        }
+        if(surfaceTextureHelper != null) {
+            surfaceTextureHelper.dispose();
+        }
+        if(janusClient != null) {
+            janusClient.disConnect();
+        }
+        if(serviceConnection != null){
+            unbindService(serviceConnection);
+        }
 
         for (VideoItem videoItem : videoItemList) {
             if (videoItem.peerConnection != null) {
@@ -237,7 +299,7 @@ public class VideoRoomActivity extends AppCompatActivity {
                                 runOnUiThread(new Runnable() {
                                     @Override
                                     public void run() {
-                                        videoCapturer.startCapture(1280, 720, 30);
+                                       // screenCapturerAndroid.startCapture(1280, 720, 30);
                                         VideoItem videoItem = addNewVideoItem(null, userName);
                                         videoItem.peerConnection = peerConnection;
                                         videoItem.videoTrack = videoTrack;
@@ -422,6 +484,81 @@ public class VideoRoomActivity extends AppCompatActivity {
         }
     }
 
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if(requestCode == REQUEST_MEDIA_PROJECTION){
+            if(resultCode == RESULT_OK) {
+                binder.showCaptureNotification();
+                startPeer(data);
+            }else{
+                Toast.makeText(getApplicationContext(),"暂无权限",Toast.LENGTH_SHORT).show();
+                finish();
+            }
+        }
+    }
+
+    private void startPeer(Intent data) {
+        screenCapturerAndroid = new ScreenCapturerAndroid(data,new MediaProjection.Callback(){
+            @Override
+            public void onStop() {
+                super.onStop();
+
+            }
+        });
+
+
+        eglBaseContext = EglBase.create().getEglBaseContext();
+
+        peerConnectionFactory = createPeerConnectionFactory();
+        AudioSource audioSource = peerConnectionFactory.createAudioSource(new MediaConstraints());
+        audioTrack = peerConnectionFactory.createAudioTrack("101", audioSource);
+
+        surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBaseContext);
+        videoSource = peerConnectionFactory.createVideoSource(screenCapturerAndroid.isScreencast());
+        screenCapturerAndroid.initialize(surfaceTextureHelper, this, videoSource.getCapturerObserver());
+        screenCapturerAndroid.startCapture(1280, 720, 30);
+
+        videoTrack = peerConnectionFactory.createVideoTrack("102", videoSource);
+//        videoTrack.addSink(surfaceViewRendererLocal);
+
+        janusClient = new JanusClient(JANUS_URL);
+        janusClient.setJanusCallback(janusCallback);
+        janusClient.connect();
+
+        peerConnection = createPeerConnection(new CreatePeerConnectionCallback() {
+            @Override
+            public void onIceGatheringComplete() {
+                janusClient.trickleCandidateComplete(videoRoomHandlerId);
+            }
+
+            @Override
+            public void onIceCandidate(IceCandidate candidate) {
+                janusClient.trickleCandidate(videoRoomHandlerId, candidate);
+            }
+
+            @Override
+            public void onIceCandidatesRemoved(IceCandidate[] candidates) {
+                peerConnection.removeIceCandidates(candidates);
+            }
+
+            @Override
+            public void onAddStream(MediaStream stream) {
+
+            }
+
+            @Override
+            public void onRemoveStream(MediaStream stream) {
+
+            }
+        });
+        peerConnection.addTrack(audioTrack);
+        peerConnection.addTrack(videoTrack);
+
+        adapter = new VideoItemAdapter();
+        recyclerView.setAdapter(adapter);
+    }
+
     private VideoCapturer createCameraCapturer(CameraEnumerator enumerator, boolean isFront) {
         final String[] deviceNames = enumerator.getDeviceNames();
 
@@ -469,8 +606,9 @@ public class VideoRoomActivity extends AppCompatActivity {
 
     private PeerConnection createPeerConnection(CreatePeerConnectionCallback callback) {
         List<PeerConnection.IceServer> iceServerList = new ArrayList<>();
-        iceServerList.add(new PeerConnection.IceServer("stun:stun.l.google.com:19302"));
-        iceServerList.add(new PeerConnection.IceServer("stun:webrtc.encmed.cn:5349"));
+        //iceServerList.add(new PeerConnection.IceServer("stun:stun.l.google.com:19302"));
+        //iceServerList.add(new PeerConnection.IceServer("stun:webrtc.encmed.cn:5349"));
+        iceServerList.add(new PeerConnection.IceServer("stun:stun.cloud.honpc.com:80"));
         return peerConnectionFactory.createPeerConnection(iceServerList, new PeerConnection.Observer() {
             @Override
             public void onSignalingChange(PeerConnection.SignalingState newState) {
@@ -690,25 +828,30 @@ public class VideoRoomActivity extends AppCompatActivity {
                     audioTrack.setEnabled(!enabled);
                 }
             });
-            holder.tvSwitchCamera.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (videoCapturer != null) {
-                        try {
-                            videoCapturer.stopCapture();
-                            videoCapturer.dispose();
-                            isFrontCamera = !isFrontCamera;
-                            videoCapturer = createVideoCapturer(isFrontCamera);
-                            if (videoCapturer != null) {
-                                videoCapturer.initialize(surfaceTextureHelper, VideoRoomActivity.this, videoSource.getCapturerObserver());
-                                videoCapturer.startCapture(1280, 720, 30);
+            if(isShareScreen){
+                holder.tvSwitchCamera.setVisibility(View.GONE);
+            }else{
+                holder.tvSwitchCamera.setVisibility(View.VISIBLE);
+                holder.tvSwitchCamera.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (videoCapturer != null) {
+                            try {
+                                videoCapturer.stopCapture();
+                                videoCapturer.dispose();
+                                isFrontCamera = !isFrontCamera;
+                                videoCapturer = createVideoCapturer(isFrontCamera);
+                                if (videoCapturer != null) {
+                                    videoCapturer.initialize(surfaceTextureHelper, VideoRoomActivity.this, videoSource.getCapturerObserver());
+                                    videoCapturer.startCapture(1280, 720, 30);
+                                }
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
                             }
-                        } catch (InterruptedException e) {
-                            e.printStackTrace();
                         }
                     }
-                }
-            });
+                });
+            }
             return holder;
         }
 
