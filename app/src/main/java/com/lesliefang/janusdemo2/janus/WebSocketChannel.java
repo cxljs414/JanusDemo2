@@ -2,6 +2,9 @@ package com.lesliefang.janusdemo2.janus;
 
 import android.util.Log;
 
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.SSLSession;
+
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -18,13 +21,16 @@ public class WebSocketChannel {
     private WebSocketCallback webSocketCallback;
 
     public void connect(String url) {
-        OkHttpClient client = new OkHttpClient();
+        OkHttpClient client = new OkHttpClient().newBuilder()
+                .hostnameVerifier((hostname, session) -> true)
+                .build();
         /* WebSocket 子协议只是添加一个 Sec-WebSocket-Protocol 的 http 请求头，告诉服务器我们要使用 janus-protocol 这种协议来通信了。
          * Response 中也会返回这个头。
          * Sec-WebSocket-Protocol=janus-protocol"
          */
         Request request = new Request.Builder()
                 .header("Sec-WebSocket-Protocol", "janus-protocol")
+
                 .url(url)
                 .build();
         webSocket = client.newWebSocket(request, new WebSocketHandler());

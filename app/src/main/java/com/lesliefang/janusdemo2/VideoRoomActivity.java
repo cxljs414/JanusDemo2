@@ -62,7 +62,8 @@ import java.util.List;
 
 public class VideoRoomActivity extends AppCompatActivity {
     private static final String TAG = "VideoRoomActivity";
-    static final String JANUS_URL = "wss://janus.conf.meetecho.com/ws";
+    //static final String JANUS_URL = "wss://janus.conf.meetecho.com/ws";
+    static final String JANUS_URL = "wss://172.20.67.10:8989/ws";
     private static final int REQUEST_MEDIA_PROJECTION = 1;
     PeerConnectionFactory peerConnectionFactory;
     PeerConnection peerConnection;
@@ -206,7 +207,7 @@ public class VideoRoomActivity extends AppCompatActivity {
             janusClient.disConnect();
         }
         if(serviceConnection != null){
-            unbindService(serviceConnection);
+            //unbindService(serviceConnection);
         }
 
         for (VideoItem videoItem : videoItemList) {
@@ -693,7 +694,7 @@ public class VideoRoomActivity extends AppCompatActivity {
         peerConnection.createOffer(new SdpObserver() {
             @Override
             public void onCreateSuccess(SessionDescription sdp) {
-                Log.d(TAG, "createOffer onCreateSuccess " + sdp.toString());
+                Log.d(TAG, "createOffer onCreateSuccess " + sdp.description);
                 peerConnection.setLocalDescription(new SdpObserver() {
                     @Override
                     public void onCreateSuccess(SessionDescription sdp) {
